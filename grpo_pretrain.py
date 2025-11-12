@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import os
+from time import time
 from typing import Any, Dict, List
 
 import numpy as np
@@ -146,7 +147,12 @@ def compute_logprobs(
 
 def main() -> None:
     args = parse_args()
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if torch.backends.mps.is_available():
+        device = "mps"
+    elif torch.cuda.is_available():
+        device = "cuda"
+    else:
+        device = "cpu"
 
     tokenizer = AutoTokenizer.from_pretrained(args.model_name, trust_remote_code=True, padding_side="left")
     if tokenizer.pad_token is None:
@@ -166,16 +172,11 @@ def main() -> None:
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
     
-    if torch.backends.mps.is_available():
-        st_device = "mps"
-    elif torch.cuda.is_available():
-        st_device = "cuda"
-    else:
-        st_device = "cpu"
+    sentence_model = SentenceTransformer(args.embedding_model, device=device)
 
-    sentence_model = SentenceTransformer(args.embedding_model, device=st_device)
+    save_dir = os.path.join(args.save_dir, time.strftime("%Y%m%d_%H%M%S"))
 
-    os.makedirs(args.save_dir, exist_ok=True)
+    os.makedirs(save_dir, exist_ok=True)
 
     step = 0
     for epoch in range(args.epochs):
@@ -262,7 +263,7 @@ def main() -> None:
                 )
 
             if step % (args.log_every * 5) == 0:
-                ckpt_path = os.path.join(args.save_dir, f"grpo_step_{step}.pt")
+                ckpt_path = os.path.join(save_dir, f"grpo_step_{step}.pt")
                 torch.save({
                     "model": model.state_dict(),
                     "step": step,
@@ -273,7 +274,7 @@ def main() -> None:
         if step >= args.max_steps:
             break
 
-    final_ckpt = os.path.join(args.save_dir, "grpo_final.pt")
+    final_ckpt = os.path.join(save_dir, "grpo_final.pt")
     torch.save({"model": model.state_dict(), "step": step}, final_ckpt)
     print(f"Saved final checkpoint to {final_ckpt}")
 
