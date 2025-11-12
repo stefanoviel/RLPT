@@ -166,7 +166,13 @@ def main() -> None:
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
     
-    st_device = "mps" if torch.backends.mps.is_available() else "cpu"
+    if torch.backends.mps.is_available():
+        st_device = "mps"
+    elif torch.cuda.is_available():
+        st_device = "cuda"
+    else:
+        st_device = "cpu"
+
     sentence_model = SentenceTransformer(args.embedding_model, device=st_device)
 
     os.makedirs(args.save_dir, exist_ok=True)
