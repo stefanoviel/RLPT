@@ -27,8 +27,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--group-size", type=int, default=4, help="Number of completions per prompt for GRPO")
     parser.add_argument("--max-new-tokens", type=int, default=4)
-    parser.add_argument("--epochs", type=int, default=10)
-    parser.add_argument("--max-steps", type=int, default=200, help="Stop after this many GRPO updates")
+    parser.add_argument("--epochs", type=int, default=1)
+    parser.add_argument("--max-steps", type=int, default=20000, help="Stop after this many GRPO updates")
     parser.add_argument("--learning-rate", type=float, default=5e-6)
     parser.add_argument("--clip-range", type=float, default=0.2, help="Clamp applied to log-prob ratio (RPO style)")
     parser.add_argument("--entropy-coef", type=float, default=0.01)
@@ -238,8 +238,7 @@ def main() -> None:
                 sim_std = similarity.std().clamp(min=args.adv_std_eps)
                 sim_score = (similarity - sim_mean) / sim_std
 
-
-                reward = scores_rep * ppl_score + (1 - scores_rep) * sim_score
+                reward = ppl_score + scores_rep * sim_score
 
             new_logprob, _, _, token_counts, outputs = compute_logprobs(
                 model, generated, attention_mask, loss_mask
@@ -260,7 +259,7 @@ def main() -> None:
             clipped_log_ratio = torch.clamp(log_ratio, -args.clip_range, args.clip_range)
             policy_loss = -(advantages * clipped_log_ratio).mean()
 
-            loss = policy_loss - args.entropy_coef * entropy
+            loss = policy_loss #- args.entropy_coef * entropy
 
             optimizer.zero_grad()
             loss.backward()
