@@ -28,6 +28,16 @@ class TaskConfig:
 
 
 TASK_CONFIGS: Dict[str, TaskConfig] = {
+    "stsb": TaskConfig(
+        name="STS-B",
+        template=(
+            "Rate the semantic similarity of the two sentences on a scale from 0 (no overlap) "
+            "to 5 (semantically equivalent). Respond with a single number.\n"
+            "Sentence 1: {sentence1}\nSentence 2: {sentence2}\nScore:"
+        ),
+        task_type="regression",
+        default_split="validation",
+    ),
     "cola": TaskConfig(
         name="CoLA",
         template=(
@@ -42,19 +52,6 @@ TASK_CONFIGS: Dict[str, TaskConfig] = {
             1: ["acceptable", "correct", "yes", "1"],
         },
     ),
-    "sst2": TaskConfig(
-        name="SST-2",
-        template=(
-            "Classify the sentiment of the sentence as positive or negative.\n"
-            "Sentence: {sentence}\nAnswer:"
-        ),
-        task_type="classification",
-        default_split="validation",
-        label_words={
-            0: ["negative", "neg", "bad", "0", "unfavorable"],
-            1: ["positive", "pos", "good", "1", "favorable"],
-        },
-    ),
     "mrpc": TaskConfig(
         name="MRPC",
         template=(
@@ -66,57 +63,6 @@ TASK_CONFIGS: Dict[str, TaskConfig] = {
         label_words={
             0: ["not paraphrase", "different", "no", "0", "not equivalent"],
             1: ["paraphrase", "same meaning", "yes", "duplicate", "equivalent", "1"],
-        },
-    ),
-    "qqp": TaskConfig(
-        name="QQP",
-        template=(
-            "Do the two questions ask the same thing? Answer 'duplicate' or 'not duplicate'.\n"
-            "Question 1: {question1}\nQuestion 2: {question2}\nAnswer:"
-        ),
-        task_type="classification",
-        default_split="validation",
-        label_words={
-            0: ["not duplicate", "different", "no", "0", "distinct"],
-            1: ["duplicate", "same question", "yes", "1"],
-        },
-    ),
-    "stsb": TaskConfig(
-        name="STS-B",
-        template=(
-            "Rate the semantic similarity of the two sentences on a scale from 0 (no overlap) "
-            "to 5 (semantically equivalent). Respond with a single number.\n"
-            "Sentence 1: {sentence1}\nSentence 2: {sentence2}\nScore:"
-        ),
-        task_type="regression",
-        default_split="validation",
-    ),
-    "mnli": TaskConfig(
-        name="MNLI",
-        template=(
-            "Read the premise and hypothesis, then answer with 'entailment', 'neutral', or 'contradiction'.\n"
-            "Premise: {premise}\nHypothesis: {hypothesis}\nAnswer:"
-        ),
-        task_type="classification",
-        default_split="validation_matched",
-        label_words={
-            0: ["entailment", "entailed", "implies", "yes"],
-            1: ["neutral", "uncertain"],
-            2: ["contradiction", "contradictory", "no"],
-        },
-    ),
-    "qnli": TaskConfig(
-        name="QNLI",
-        template=(
-            "Does the answer sentence contain information that answers the question? "
-            "Respond with 'entailment' or 'not entailment'.\n"
-            "Question: {question}\nSentence: {sentence}\nAnswer:"
-        ),
-        task_type="classification",
-        default_split="validation",
-        label_words={
-            0: ["entailment", "yes"],
-            1: ["not entailment", "no", "contradiction"],
         },
     ),
     "rte": TaskConfig(
@@ -164,16 +110,24 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate a GRPO-trained SmolLM checkpoint on GLUE.")
     parser.add_argument(
         "--checkpoint",
-        required=True,
-        help="Path to the GRPO checkpoint .pt file (produced by grpo_pretrain.py).",
+        default=None,
+        help="Path to the GRPO checkpoint .pt file (produced by grpo_pretrain.py). Required unless --use-base-model is set.",
     )
     parser.add_argument("--model-name", default="HuggingFaceTB/SmolLM-135M", help="Base model repo id.")
+    parser.add_argument(
+        "--use-base-model",
+        action="store_true",
+        help="Skip loading a GRPO checkpoint and evaluate the base model weights.",
+    )
     parser.add_argument(
         "--tasks",
         nargs="+",
         choices=list(TASK_CONFIGS.keys()) + ["all"],
         default=["all"],
-        help="Space-separated list of GLUE tasks to evaluate, or 'all' for the full suite.",
+        help=(
+            "Space-separated list of supported GLUE tasks (sts-b cola mrpc rte wnli), "
+            "or 'all' to run the full subset."
+        ),
     )
     parser.add_argument(
         "--split",
@@ -214,13 +168,14 @@ def load_model(model_name: str, checkpoint: str, device: torch.device, vocab_siz
     dtype = torch.bfloat16 if device.type == "cuda" else torch.float32
     model = AutoModelForCausalLM.from_pretrained(model_name, trust_remote_code=True, torch_dtype=dtype)
     model.resize_token_embeddings(vocab_size)
-    checkpoint_obj = torch.load(checkpoint, map_location=device)
-    state_dict = checkpoint_obj.get("model", checkpoint_obj)
-    missing, unexpected = model.load_state_dict(state_dict, strict=False)
-    if missing:
-        print(f"[WARN] Missing keys when loading checkpoint: {missing}")
-    if unexpected:
-        print(f"[WARN] Unexpected keys when loading checkpoint: {unexpected}")
+    if checkpoint:
+        checkpoint_obj = torch.load(checkpoint, map_location=device)
+        state_dict = checkpoint_obj.get("model", checkpoint_obj)
+        missing, unexpected = model.load_state_dict(state_dict, strict=False)
+        if missing:
+            print(f"[WARN] Missing keys when loading checkpoint: {missing}")
+        if unexpected:
+            print(f"[WARN] Unexpected keys when loading checkpoint: {unexpected}")
     model.to(device)
     model.eval()
     return model
@@ -331,9 +286,9 @@ def matthews_corrcoef(labels: Sequence[int], preds: Sequence[Optional[int]]) -> 
 def compute_metrics(task: str, labels: List[int], preds: List[Optional[int]], scores: List[Optional[float]]) -> Dict[str, float]:
     if task == "cola":
         return {"matthews": matthews_corrcoef(labels, preds)}
-    if task in {"sst2", "mnli", "qnli", "rte", "wnli"}:
+    if task in {"rte", "wnli"}:
         return {"accuracy": accuracy_score(labels, preds)}
-    if task == "mrpc" or task == "qqp":
+    if task == "mrpc":
         return {
             "accuracy": accuracy_score(labels, preds),
             "f1": binary_f1(labels, preds, positive_label=1),
@@ -459,7 +414,10 @@ def main() -> None:
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    model = load_model(args.model_name, args.checkpoint, device, len(tokenizer))
+    if not args.use_base_model and not args.checkpoint:
+        raise ValueError("Either provide --checkpoint or pass --use-base-model to evaluate the original model.")
+
+    model = load_model(args.model_name, args.checkpoint if not args.use_base_model else None, device, len(tokenizer))
     model.config.pad_token_id = tokenizer.pad_token_id
     if tokenizer.eos_token_id is not None:
         model.config.eos_token_id = tokenizer.eos_token_id
