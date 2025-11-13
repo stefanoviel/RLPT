@@ -23,7 +23,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--embeddings", default="text_embeddings.npy", help="NumPy file with sentence embeddings")
     parser.add_argument("--model-name", default="HuggingFaceTB/SmolLM-135M", help="HF model repo")
     parser.add_argument("--embedding-model", default="all-MiniLM-L6-v2", help="SentenceTransformer model")
-    parser.add_argument("--batch-size", type=int, default=4)
+    parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--group-size", type=int, default=4, help="Number of completions per prompt for GRPO")
     parser.add_argument("--max-new-tokens", type=int, default=4)
     parser.add_argument("--epochs", type=int, default=1)
@@ -191,11 +191,7 @@ def main() -> None:
             batch_size = scores.size(0)
             group_size = args.group_size
 
-            print("prompts")
-            for p in prompts:
-                print(p)
-
-            prompt_inputs = tokenizer(prompts, padding=True, truncation=True, return_tensors="pt")
+            prompt_inputs = tokenizer(prompts, padding=True, return_tensors="pt")
             prompt_input_ids = prompt_inputs["input_ids"].to(device)
             prompt_attention_mask = prompt_inputs["attention_mask"].to(device)
 
@@ -221,9 +217,6 @@ def main() -> None:
             context_mask[:, :context_len] = prompt_attention_mask
             loss_mask = attention_mask * (1 - context_mask)
 
-            print("generated:")
-            for g in tokenizer.batch_decode(generated, skip_special_tokens=True):
-                print(g)
 
             with torch.no_grad():
                 old_logprob, perplexity, _, _, _ = compute_logprobs(
@@ -243,7 +236,6 @@ def main() -> None:
                 sim_std = similarity.std().clamp(min=args.adv_std_eps)
                 sim_score = (similarity - sim_mean) / sim_std
 
-                print("scores", scores, "perplexity score ", ppl_score, "similarity score", sim_score)
 
                 reward = scores_rep * ppl_score + (1 - scores_rep) * sim_score
 
