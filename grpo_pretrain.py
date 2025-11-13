@@ -13,20 +13,21 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
+from torch.utils.tensorboard import SummaryWriter
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from sentence_transformers import SentenceTransformer
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="GRPO pre-training PoC for SmolLM")
-    parser.add_argument("--csv", default="cola_with_scores.csv", help="CSV file with text and score columns")
+    parser.add_argument("--csv", default="data/cola_with_scores.csv", help="CSV file with text and score columns")
     parser.add_argument("--embeddings", default="text_embeddings.npy", help="NumPy file with sentence embeddings")
     parser.add_argument("--model-name", default="HuggingFaceTB/SmolLM-135M", help="HF model repo")
     parser.add_argument("--embedding-model", default="all-MiniLM-L6-v2", help="SentenceTransformer model")
-    parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--group-size", type=int, default=4, help="Number of completions per prompt for GRPO")
     parser.add_argument("--max-new-tokens", type=int, default=4)
-    parser.add_argument("--epochs", type=int, default=1)
+    parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--max-steps", type=int, default=200, help="Stop after this many GRPO updates")
     parser.add_argument("--learning-rate", type=float, default=5e-6)
     parser.add_argument("--clip-range", type=float, default=0.2, help="Clamp applied to log-prob ratio (RPO style)")
@@ -166,7 +167,7 @@ def main() -> None:
     model = AutoModelForCausalLM.from_pretrained(
         args.model_name,
         trust_remote_code=True,
-        torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
+        dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
     )
     model.resize_token_embeddings(len(tokenizer))
     model.config.pad_token_id = tokenizer.pad_token_id
@@ -179,6 +180,7 @@ def main() -> None:
     save_dir = os.path.join(args.save_dir, time.strftime("%Y%m%d_%H%M%S"))
 
     os.makedirs(save_dir, exist_ok=True)
+    writer = SummaryWriter(log_dir=save_dir)
 
     step = 0
     for epoch in range(args.epochs):
@@ -270,10 +272,18 @@ def main() -> None:
                 avg_reward = reward.mean().item()
                 avg_ppl = perplexity.mean().item()
                 avg_sim = similarity.mean().item()
+                ent_value = entropy.item()
+                pol_loss = policy_loss.item()
                 print(
                     f"step={step} epoch={epoch} loss={loss.item():.4f} reward={avg_reward:.4f} "
                     f"ppl={avg_ppl:.2f} sim={avg_sim:.3f}"
                 )
+                writer.add_scalar("train/loss", loss.item(), step)
+                writer.add_scalar("train/policy_loss", pol_loss, step)
+                writer.add_scalar("train/entropy", ent_value, step)
+                writer.add_scalar("train/reward", avg_reward, step)
+                writer.add_scalar("train/perplexity", avg_ppl, step)
+                writer.add_scalar("train/similarity", avg_sim, step)
 
             if step % (args.log_every * 5) == 0:
                 ckpt_path = os.path.join(save_dir, f"grpo_step_{step}.pt")
@@ -289,6 +299,7 @@ def main() -> None:
 
     final_ckpt = os.path.join(save_dir, "grpo_final.pt")
     torch.save({"model": model.state_dict(), "step": step}, final_ckpt)
+    writer.close()
     print(f"Saved final checkpoint to {final_ckpt}")
 
 
